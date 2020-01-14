@@ -1,9 +1,5 @@
 <?php
 
-/**
- * @deprecated 1.5.0 This file is deprecated, use moduleFrontController instead
- */
-
 include(dirname(__FILE__).'/../../config/config.inc.php');
 include(dirname(__FILE__).'/jeeb.php');
 
@@ -28,4 +24,4 @@ foreach (Module::getPaymentModules() as $module)
 if (!$authorized)
         die($jeeb->l('This payment method is not available.', 'validation'));
 
-echo $jeeb->execPayment($cart);
+echo $jeeb->processPayment($cart);

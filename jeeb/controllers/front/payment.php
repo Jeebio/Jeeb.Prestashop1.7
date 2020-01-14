@@ -15,6 +15,6 @@ class jeebPaymentModuleFrontController extends ModuleFrontController
 
     $cart = $this->context->cart;
 
-    echo $this->module->execPayment($cart);
+    echo $this->module->processPayment($cart);
   }
 }

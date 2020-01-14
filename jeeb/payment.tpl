@@ -1,3 +1,4 @@
+
 <p class="payment_module">
 
   <a href="{$this_path}payment.php" title="{l s='Pay with BitPay' mod='jeeb'}">

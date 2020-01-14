@@ -7,7 +7,8 @@ $jeeb = new jeeb();
 $postdata = file_get_contents("php://input");
 $json = json_decode($postdata, true);
 // fclose($handle);
-if($json['signature']==Configuration::get('jeeb_APIKEY')){
+$signature = Configuration::get('jeeb_APIKEY');
+if($json['signature']==$signature){
   error_log("Entered Jeeb-Notification");
   error_log("Response =>". var_export($json, TRUE));
   if($json['orderNo']){
@@ -24,10 +25,6 @@ if($json['signature']==Configuration::get('jeeb_APIKEY')){
     $cart_id = (int)$result[0]['cart_id'];
     $order_id = Order::getOrderByCartId($cart_id);
     $order = new Order($order_id);
-
-
-    // Call Jeeb
-    $network_uri = "https://core.jeeb.io/api/";
 
     if ( $json['stateId']== 2 ) {
       $order_status = Configuration::get('JEEB_PENDING');
@@ -62,26 +59,9 @@ if($json['signature']==Configuration::get('jeeb_APIKEY')){
         "token" => $json["token"]
       );
 
-      $data_string = json_encode($data);
-      $api_key = Configuration::get('jeeb_APIKEY');
-      $url = $network_uri.'payments/'.$api_key.'/confirm';
-      error_log("Signature:".$api_key." Base-Url:".$network_uri." Url:".$url);
+      $is_confirmed = $jeeb->confirm_payment($signature, $data);
 
-      $ch = curl_init($url);
-      curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
-      curl_setopt($ch, CURLOPT_POSTFIELDS, $data_string);
-      curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-      curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-          'Content-Type: application/json',
-          'Content-Length: ' . strlen($data_string))
-      );
-
-      $result = curl_exec($ch);
-      $data = json_decode( $result , true);
-      error_log("data = ".var_export($data, TRUE));
-
-
-      if($data['result']['isConfirmed']){
+      if($is_confirmed){
         error_log('Payment confirmed by jeeb');
         $order_status = Configuration::get('PS_OS_PAYMENT');
 
@@ -123,7 +103,7 @@ if($json['signature']==Configuration::get('jeeb_APIKEY')){
 
     }
     else if ( $json['stateId']== 6 ) {
-      $order_status = Configuration::get('PS_OS_CANCELED');
+      $order_status = Configuration::get('PS_OS_REFUND');
 
       $new_history = new OrderHistory();
       $new_history->id_order = (int)$json['orderNo'];
@@ -136,7 +116,7 @@ if($json['signature']==Configuration::get('jeeb_APIKEY')){
 
     }
     else if ( $json['stateId']== 7 ) {
-      $order_status = Configuration::get('PS_OS_CANCELED');
+      $order_status = Configuration::get('PS_OS_REFUND');
 
       $new_history = new OrderHistory();
       $new_history->id_order = (int)$json['orderNo'];

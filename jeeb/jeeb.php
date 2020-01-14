@@ -15,62 +15,14 @@ function jeeblog($contents) {
   }
 }
 
-function convertIrrToBtc($url, $amount, $signature, $baseCur) {
-    error_log("Entered into Convert Base To Target");
-
-    // return Jeeb::convert_irr_to_btc($url, $amount, $signature);
-    $ch = curl_init($url.'currency?'.$signature.'&value='.$amount.'&base='.$baseCur.'&target=btc');
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "GET");
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-      'Content-Type: application/json')
-  );
-
-  $result = curl_exec($ch);
-  $data = json_decode( $result , true);
-  error_log('Response =>'. var_export($data, TRUE));
-  // Return the equivalent bitcoin value acquired from Jeeb server.
-  return (float) $data["result"];
-
-  }
-
-
-  function createInvoice($url, $amount, $options = array(), $signature) {
-
-      $post = json_encode($options);
-
-      $ch = curl_init($url.'payments/' . $signature . '/issue/');
-      curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
-      curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-      curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-      curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-          'Content-Type: application/json',
-          'Content-Length: ' . strlen($post))
-      );
-
-      $result = curl_exec($ch);
-      $data = json_decode( $result ,true );
-      error_log('Response =>'. var_export($data, TRUE));
-
-      return $data['result']['token'];
-
-  }
-
-  function redirectPayment($url, $token) {
-    error_log("Entered into auto submit-form");
-    // Using Auto-submit form to redirect user with the token
-    echo "<form id='form' method='post' action='".$url."payments/invoice'>".
-            "<input type='hidden' autocomplete='off' name='token' value='".$token."'/>".
-           "</form>".
-           "<script type='text/javascript'>".
-                "document.getElementById('form').submit();".
-           "</script>";
-  }
-
 class jeeb extends PaymentModule {
     private $_html       = '';
     private $_postErrors = array();
     private $key;
+
+    const PLUGIN_NAME = 'prestashop1.7';
+    const PLUGIN_VERSION = '3.0';
+    const BASE_URL = "https://core.jeeb.io/api/";
 
     public function __construct() {
       include(dirname(__FILE__).'/config.php');
@@ -78,17 +30,8 @@ class jeeb extends PaymentModule {
       $this->version         = '1.7';
       $this->author          = 'Jeeb';
       $this->className       = 'jeeb';
-      $this->currencies      = true;
-      $this->currencies_mode = 'checkbox';
       $this->tab             = 'payments_gateways';
       $this->display         = 'view';
-      if (Configuration::get('jeeb_TESTMODE') == "1") {
-        $this->jeeburl       = $testurl;
-        $this->apiurl          = $testurl;
-      } else {
-        $this->jeeburl       = $jeeburl;
-        $this->apiurl          = $jeeburl;
-      }
       $this->sslport         = $sslport;
       $this->verifypeer      = $verifypeer;
       $this->verifyhost      = $verifyhost;
@@ -98,8 +41,8 @@ class jeeb extends PaymentModule {
       parent::__construct();
 
       $this->page = basename(__FILE__, '.php');
-      $this->displayName      = $this->l('jeeb');
-      $this->description      = $this->l('Accepts Bitcoin payments via Jeeb.');
+      $this->displayName      = $this->l('Jeeb');
+      $this->description      = $this->l('The first Iranian platform for accepting and processing cryptocurrencies payments.');
       $this->confirmUninstall = $this->l('Are you sure you want to delete your details?');
 
       // Backward compatibility
@@ -112,6 +55,10 @@ class jeeb extends PaymentModule {
 
       if(!function_exists('curl_version')) {
         $this->_errors[] = $this->l('Sorry, this module requires the cURL PHP extension but it is not enabled on your server.  Please ask your web hosting provider for assistance.');
+        return false;
+      }
+
+      if (!parent::install() || !$this->registerHook('invoice') || !$this->registerHook('payment') || !$this->registerHook('paymentOptions')) {
         return false;
       }
 
@@ -167,10 +114,6 @@ class jeeb extends PaymentModule {
         Configuration::updateValue('JEEB_CONFIRMING', $order_confirming->id);
     }
 
-      if (!parent::install() || !$this->registerHook('invoice') || !$this->registerHook('payment') || !$this->registerHook('paymentReturn') || !$this->registerHook('paymentOptions')) {
-        return false;
-      }
-
       $db = Db::getInstance();
 
       $query = "CREATE TABLE `"._DB_PREFIX_."order_bitcoin_jeeb` (
@@ -200,8 +143,6 @@ class jeeb extends PaymentModule {
 
         Configuration::deleteByName('jeeb_APIKEY');
         Configuration::deleteByName('jeeb_TESTMODE');
-        Configuration::deleteByName('jeeb_APIKEY');
-        Configuration::deleteByName('jeeb_TESTMODE');
         Configuration::deleteByName('jeeb_BASECOIN');
         Configuration::deleteByName('jeeb_BTC');
         Configuration::deleteByName('jeeb_BCH');
@@ -210,13 +151,18 @@ class jeeb extends PaymentModule {
         Configuration::deleteByName('jeeb_LTC');
         Configuration::deleteByName('jeeb_ETH');
         Configuration::deleteByName('jeeb_TESTBTC');
+        Configuration::deleteByName('jeeb_TESTLTC');
+        Configuration::deleteByName('jeeb_EXPIRATION');
+        Configuration::deleteByName('jeeb_ALLOW_REFUND');
         Configuration::deleteByName('jeeb_LANG');
+        Configuration::deleteByName('jeeb_BTNLANG');
+        Configuration::deleteByName('jeeb_BTNTHEME');
 
       return parent::uninstall();
     }
 
     public function getContent() {
-      $this->_html .= '<h2>'.$this->l('jeeb').'</h2>';
+      $this->_html .= '<h2>'.$this->l('Jeeb').'</h2>';
 
       $this->_postProcess();
       // $this->_setjeebSubscription();
@@ -224,7 +170,6 @@ class jeeb extends PaymentModule {
 
       return $this->_html;
     }
-
 
     public function hookPaymentOptions($params)
     {
@@ -243,7 +188,8 @@ class jeeb extends PaymentModule {
     {
         $jeeb_option = new PaymentOption();
         $jeeb_option->setCallToActionText($this->l('Jeeb'))
-                      ->setAction(Configuration::get('PS_FO_PROTOCOL').__PS_BASE_URI__."modules/{$this->name}/payment.php");
+                      ->setAction(Configuration::get('PS_FO_PROTOCOL').__PS_BASE_URI__."modules/{$this->name}/payment.php")
+                      ->setLogo(Media::getMediaPath(_PS_MODULE_DIR_.$this->name.'/logo.png'));
 
         return $jeeb_option;
     }
@@ -273,7 +219,9 @@ class jeeb extends PaymentModule {
                          <link type="text/css" rel="stylesheet" href="'._PS_BASE_URL_._PS_JS_DIR_.'jquery/plugins/tabpane/jquery.tabpane.css" />';
       }
 
-      $this->_html .= '<input type="hidden" name="tabs" id="tabs" value="0" />
+      $this->_html .= '<script type="text/javascript" src="'.__PS_BASE_URI__.'modules/'.$this->name.'/lib/admin.js"></script>
+                       <link type="text/css" rel="stylesheet" href="'.__PS_BASE_URI__.'modules/'.$this->name.'/lib/admin.css" />
+                       <input type="hidden" name="tabs" id="tabs" value="0" />
                        <div class="tab-pane" id="tab-pane-1" style="width:100%;">
                        <div class="tab-page" id="step1">
                        <h4 class="tab">'.$this->l('Settings').'</h2>
@@ -303,14 +251,18 @@ class jeeb extends PaymentModule {
         $testmode = "";
       }
 
-      $btc = $eur = $irr = $usd = $toman = "";
+      if (Configuration::get('jeeb_ALLOW_REFUND') == "1") {
+        $allow_refund = "checked";
+      } else {
+        $allow_refund = "";
+      }
+
       Configuration::get('jeeb_BASECOIN') == "btc" ? $btc = "selected" : $btc = "" ;
       Configuration::get('jeeb_BASECOIN') == "eur" ? $eur = "selected" : $eur = "" ;
       Configuration::get('jeeb_BASECOIN') == "irr" ? $irr = "selected" : $irr = "" ;
       Configuration::get('jeeb_BASECOIN') == "toman" ? $toman = "selected" : $toman = "" ;
       Configuration::get('jeeb_BASECOIN') == "usd" ? $usd = "selected" : $usd = "" ;
 
-      $target_btc = $target_eth = $target_xrp = $target_xmr = $target_bch = $target_ltc = $target_test_btc = "";
       Configuration::get("jeeb_BTC") == "btc" ? $target_btc = "checked" : $target_btc = "";
       Configuration::get("jeeb_ETH") == "eth" ? $target_eth = "checked" : $target_eth = "";
       Configuration::get("jeeb_XRP") == "xrp" ? $target_xrp = "checked" : $target_xrp = "";
@@ -318,34 +270,96 @@ class jeeb extends PaymentModule {
       Configuration::get("jeeb_BCH") == "bch" ? $target_bch = "checked" : $target_bch = "";
       Configuration::get("jeeb_LTC") == "ltc" ? $target_ltc = "checked" : $target_ltc = "";
       Configuration::get("jeeb_TESTBTC") == "test-btc" ? $target_test_btc = "checked" : $target_test_btc = "";
+      Configuration::get("jeeb_TESTLTC") == "test-ltc" ? $target_test_ltc = "checked" : $target_test_ltc = "";
 
-      $auto_select = $eng = $persian = "";
       Configuration::get("jeeb_LANG") == "none" ? $auto_select = "selected" : $auto_select = "" ;
       Configuration::get("jeeb_LANG") == "en" ? $eng = "selected" : $eng = "" ;
       Configuration::get("jeeb_LANG") == "fa" ? $persian = "selected" : $persian = "" ;
+
+      Configuration::get("jeeb_BTNLANG") == "en" ? $btn_eng = "selected" : $btn_eng = "" ;
+      Configuration::get("jeeb_BTNLANG") == "fa" ? $btn_persian = "selected" : $btn_persian = "" ;
+
+      Configuration::get("jeeb_BTNTHEME") == "blue" ? $blue = "selected" : $blue = "" ;
+      Configuration::get("jeeb_BTNTHEME") == "white" ? $white = "selected" : $white = "" ;
+      Configuration::get("jeeb_BTNTHEME") == "transparent" ? $transparent = "selected" : $transparent = "" ;
 
 
       $html = '<h2>'.$this->l('Settings').'</h2>
                <div style="clear:both;margin-bottom:30px;">
                <h3 style="clear:both;">'.$this->l('Signature').'</h3>
                <input type="text" style="width:400px;" name="apikey_jeeb" value="'.htmlentities(Tools::getValue('apikey', Configuration::get('jeeb_APIKEY')), ENT_COMPAT, 'UTF-8').'" />
+               <p>Enter your Jeeb signature</p>
                </div>
                <div style="clear:both;margin-bottom:30px;overflow:hidden;">
-               <h3 style="clear:both;">'.$this->l('Test Mode').'</h3>
-               <label style="width:auto;"><input type="checkbox" name="testmode_jeeb" value="1" '.$testmode.'> '.$this->l('Check to enable').'</label>
+               <h3 style="clear:both;">'.$this->l('Allow TestNets').'</h3>
+               <label style="width:auto;">
+               <input type="checkbox" name="testmode_jeeb" value="1" '.$testmode.'>'.$this->l('Allows testnets such as TEST-BTC to get processed.').'
+               </label>
                </div>
                <div style="clear:both;margin-bottom:30px;overflow:hidden;">
-               <h3 style="clear:both;">'.$this->l('Basecoin').'</h3>
-               <label style="width:auto;"><select name="basecoin_jeeb"><option value="btc" '.$btc.'>BTC</option><option value="eur" '.$eur.'>EUR</option><option value="irr" '.$irr.'>IRR</option><option value="toman" '.$toman.'>TOMAN</option><option value="usd" '.$usd.'>USD</option></select> '.$this->l('Select the base-currency of your shop').'</label>
+               <h3 style="clear:both;">'.$this->l('Base Currency').'</h3>
+               <label style="width:auto;">
+               <select name="basecoin_jeeb">
+               <option value="btc" '.$btc.'>BTC</option>
+               <option value="eur" '.$eur.'>EUR</option>
+               <option value="irr" '.$irr.'>IRR</option>
+               <option value="toman" '.$toman.'>TOMAN</option>
+               <option value="usd" '.$usd.'>USD</option>
+               </select>'
+               .$this->l('The base currency of your website.').'
+               </label>
                </div>
                <div style="clear:both;margin-bottom:30px;overflow:hidden;">
-               <h3 style="clear:both;">'.$this->l('Targetcoin').'</h3>
-               <input type="checkbox" name="btc_jeeb" value="btc" '.$target_btc.'>BTC<br><input type="checkbox" name="eth_jeeb" value="eth" '.$target_eth.'>ETH<br><input type="checkbox" name="xrp_jeeb" value="xrp" '.$target_xrp.'>XRP<br><input type="checkbox" name="xmr_jeeb" value="xmr" '.$target_xmr.'>XMR<br><input type="checkbox" name="bch_jeeb" value="bch" '.$target_bch.'>BCH<br><input type="checkbox" name="ltc_jeeb" value="ltc" '.$target_ltc.'>LTC<br><input type="checkbox" name="testbtc_jeeb" value="test-btc" '.$target_test_btc.'>TEST-BTC<br><label style="width:auto;">'.$this->l('The target currency to which your base currency will get converted(Multi-select).').'</label>
+               <h3 style="clear:both;">'.$this->l('Payable Currency').'</h3>
+               <input type="checkbox" name="btc_jeeb" value="btc" '.$target_btc.'>BTC<br>
+               <input type="checkbox" name="eth_jeeb" value="eth" '.$target_eth.'>ETH<br>
+               <input type="checkbox" name="xrp_jeeb" value="xrp" '.$target_xrp.'>XRP<br>
+               <input type="checkbox" name="xmr_jeeb" value="xmr" '.$target_xmr.'>XMR<br>
+               <input type="checkbox" name="bch_jeeb" value="bch" '.$target_bch.'>BCH<br>
+               <input type="checkbox" name="ltc_jeeb" value="ltc" '.$target_ltc.'>LTC<br>
+               <input type="checkbox" name="testbtc_jeeb" value="test-btc" '.$target_test_btc.'>TEST-BTC<br>
+               <input type="checkbox" name="testltc_jeeb" value="test-ltc" '.$target_test_ltc.'>TEST-LTC<br>
+               <label style="width:auto;">'.$this->l('The currencies which users can use for payments.').'</label>
                </div>
                <div style="clear:both;margin-bottom:30px;overflow:hidden;">
                <h3 style="clear:both;">'.$this->l('Language').'</h3>
-               <select name="lang_jeeb"><option value="none" '.$auto_select.'>Auto-Select</option><option value="en" '.$eng.'>English</option><option value="fa" '.$persian.'>Persian</option></select><br><label style="width:auto;">'.$this->l('Set the language of the payment page..').'</label>
+               <select name="lang_jeeb">
+               <option value="none" '.$auto_select.'>Auto-Select</option>
+               <option value="en" '.$eng.'>English</option>
+               <option value="fa" '.$persian.'>Persian</option>
+               </select><br>
+               <label style="width:auto;">'.$this->l('The language of the payment area.').'</label>
                </div>
+               <div style="clear:both;margin-bottom:30px;overflow:hidden;">
+               <h3 style="clear:both;">'.$this->l('Allow Refund').'</h3>
+               <label style="width:auto;">
+               <input type="checkbox" name="allow_refund_jeeb" value="1" '.$allow_refund.'> '.$this->l('Allows payments to be refunded.').'</label>
+               </div>
+               <div style="clear:both;margin-bottom:30px;">
+               <h3 style="clear:both;">'.$this->l('Expiration Time').'</h3>
+               <input type="text" style="width:400px;" name="expiration_jeeb" value="'.htmlentities(Tools::getValue('expiration', Configuration::get('jeeb_EXPIRATION')), ENT_COMPAT, 'UTF-8').'" />
+               <p>Expands default payments expiration time. It should be between 15 to 2880 (mins).</p>
+               </div>
+               <div style="clear:both;margin-bottom:30px;overflow:hidden;">
+               <h3 style="clear:both;">'.$this->l('Checkout Button Languages').'</h3>
+               <select name="btnlang_jeeb">
+               <option value="en" '.$btn_eng.'>English</option>
+               <option value="fa" '.$btn_persian.'>Persian</option>
+               </select><br><label style="width:auto;">'.$this->l('Jeeb\'s checkout button preferred language.').'</label>
+               </div>
+               <div style="clear:both;margin-bottom:30px;overflow:hidden;">
+               <h3 style="clear:both;">'.$this->l('Checkout Button Theme').'</h3>
+               <select name="btntheme_jeeb">
+               <option value="blue" '.$blue.'>Blue</option>
+               <option value="white" '.$white.'>White</option>
+               <option value="transparent" '.$transparent.'>Transparent</option></select>
+               <br><label style="width:auto;">'.$this->l('Jeeb\'s checkout button preferred theme.').'</label>
+               </div>
+               <div style="clear:both;margin-bottom:30px;">
+               <h3 style="clear:both;">'.$this->l('Checkout Button').'</h3>
+               <input type="text" style="width:400px;" id="btnurl" name="btnurl"/>
+               </div>
+               <input type="hidden" name="jeebCurBtnUrl" id="jeebCurBtnUrl" value="' . Configuration::get("jeeb_BTNURL") . '"/>
                <p><b>IMPORTANT NOTE<b>: The minimum price of the product should be 10000 IRR.</p>
                <p class="center"><input class="button" type="submit" name="submitjeeb" value="'.$this->l('Save settings').'" /></p>';
 
@@ -370,6 +384,17 @@ class jeeb extends PaymentModule {
 
           $this->_html = $this->displayError($error_msg);
         } else {
+
+          if(Tools::getValue('expiration_jeeb') == NULL ||
+          is_numeric(trim(Tools::getValue('expiration_jeeb'))) === false ||
+          trim(Tools::getValue('expiration_jeeb'))< 15 ||
+          trim(Tools::getValue('expiration_jeeb'))> 2880){
+            Configuration::updateValue('jeeb_EXPIRATION', trim("15"));
+          }
+          else{
+            Configuration::updateValue('jeeb_EXPIRATION', trim(Tools::getValue('expiration_jeeb')));
+          }
+
           Configuration::updateValue('jeeb_APIKEY', trim(Tools::getValue('apikey_jeeb')));
           Configuration::updateValue('jeeb_TESTMODE', trim(Tools::getValue('testmode_jeeb')));
           Configuration::updateValue('jeeb_BASECOIN', trim(Tools::getValue('basecoin_jeeb')));
@@ -380,7 +405,11 @@ class jeeb extends PaymentModule {
           Configuration::updateValue('jeeb_LTC', trim(Tools::getValue('ltc_jeeb')));
           Configuration::updateValue('jeeb_ETH', trim(Tools::getValue('eth_jeeb')));
           Configuration::updateValue('jeeb_TESTBTC', trim(Tools::getValue('testbtc_jeeb')));
+          Configuration::updateValue('jeeb_TESTLTC', trim(Tools::getValue('testltc_jeeb')));
+          Configuration::updateValue('jeeb_ALLOW_REFUND', trim(Tools::getValue('allow_refund_jeeb')));
           Configuration::updateValue('jeeb_LANG', trim(Tools::getValue('lang_jeeb')));
+          Configuration::updateValue('jeeb_BTNLANG', trim(Tools::getValue('btnlang_jeeb')));
+          Configuration::updateValue('jeeb_BTNTHEME', trim(Tools::getValue('btntheme_jeeb')));
           $this->_html = $this->displayConfirmation($this->l('Settings updated'));
         }
 
@@ -388,7 +417,81 @@ class jeeb extends PaymentModule {
 
     }
 
-    public function execPayment($cart) {
+    public function convert_base_to_bitcoin($amount, $signature, $baseCur) {
+        error_log("Entered into Convert Base To Target");
+
+        // return Jeeb::convert_irr_to_btc($url, $amount, $signature);
+        $ch = curl_init(self::BASE_URL.'currency?'.$signature.'&value='.$amount.'&base='.$baseCur.'&target=btc');
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "GET");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+          'Content-Type: application/json',
+          'User-Agent:'.self::PLUGIN_NAME . '/' . self::PLUGIN_VERSION)
+      );
+
+      $result = curl_exec($ch);
+      $data = json_decode( $result , true);
+      error_log('Response =>'. var_export($data, TRUE));
+      // Return the equivalent bitcoin value acquired from Jeeb server.
+      return (float) $data["result"];
+
+      }
+
+
+      public function create_payment($options = array(), $signature) {
+
+          $post = json_encode($options);
+
+          $ch = curl_init(self::BASE_URL.'payments/' . $signature . '/issue/');
+          curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
+          curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+          curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+          curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+              'Content-Type: application/json',
+              'Content-Length: ' . strlen($post),
+              'User-Agent:'.self::PLUGIN_NAME . '/' . self::PLUGIN_VERSION)
+          );
+
+          $result = curl_exec($ch);
+          $data = json_decode( $result ,true );
+          error_log('Response =>'. var_export($data, TRUE));
+
+          return $data['result']['token'];
+
+      }
+
+
+      public function confirm_payment($signature, $options = array()) {
+
+          $post = json_encode($options);
+          $ch = curl_init(self::BASE_URL . 'payments/' . $signature . '/confirm/');
+          curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
+          curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+          curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+          curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+              'Content-Type:application/json',
+              'User-Agent:' . self::PLUGIN_NAME . '/' . self::PLUGIN_VERSION,
+          ));
+          $result = curl_exec($ch);
+          $data = json_decode($result, true);
+          error_log('Response =>'. var_export($data, TRUE));
+          return (bool) $data['result']['isConfirmed'];
+
+      }
+
+
+      public function redirectPayment($token) {
+        error_log("Entered into auto submit-form");
+        // Using Auto-submit form to redirect user with the token
+        echo "<form id='form' method='post' action='".self::BASE_URL."payments/invoice'>".
+                "<input type='hidden' autocomplete='off' name='token' value='".$token."'/>".
+               "</form>".
+               "<script type='text/javascript'>".
+                    "document.getElementById('form').submit();".
+               "</script>";
+      }
+
+    public function processPayment($cart) {
       $total = $cart->getOrderTotal(true);
 
       if (_PS_VERSION_ <= '1.5')
@@ -396,7 +499,6 @@ class jeeb extends PaymentModule {
       else
         $callBack     = Context::getContext()->link->getModuleLink('jeeb', 'validation');
 
-      $baseUri         = "https://core.jeeb.io/api/" ;
       $signature       = Configuration::get('jeeb_APIKEY'); // Signature
       $baseCur         = Configuration::get('jeeb_BASECOIN');
       $lang            = Configuration::get("jeeb_LANG") == "none" ? NULL : Configuration::get("jeeb_LANG") ;
@@ -409,7 +511,8 @@ class jeeb extends PaymentModule {
                       'LTC',
                       'BCH',
                       'ETH',
-                      'TESTBTC'
+                      'TESTBTC',
+                      'TESTLTC'
                      );
 
       foreach ($params as $p) {
@@ -419,14 +522,14 @@ class jeeb extends PaymentModule {
 
       error_log("Base Uri : ".$baseUri." Signature : ".$signature." CallbackUri : ".$callBack." NotificationUri : ".$notification);
       error_log("Cost = ". $total);
-      
+
       if($baseCur=='toman'){
         $baseCur='irr';
         $order_total *= 10;
       }
 
 
-      $amount = convertIrrToBtc($baseUri, $order_total, $signature, $baseCur);
+      $amount = $this -> convert_base_to_bitcoin($order_total, $signature, $baseCur);
 
       $db = Db::getInstance();
       $result = array();
@@ -442,13 +545,14 @@ class jeeb extends PaymentModule {
         'value'            => (float) $amount,
         'webhookUrl'       => $notification,
         'callBackUrl'      => $callBack,
-        'allowReject'      => Configuration::get('jeeb_TESTMODE') == "1" ? false : true,
+        'expiration'       => Configuration::get('jeeb_EXPIRATION'),
+        'allowReject'      => Configuration::get('jeeb_ALLOW_REFUND') == "1" ? true : false,
         "coins"            => $target_cur,
         "allowTestNet"     => Configuration::get("jeeb_TESTMODE") == "1" ? true : false,
         "language"         => $lang
       );
 
-      $token = createInvoice($baseUri, $amount, $params, $signature);
+      $token = $this -> create_payment($params, $signature);
 
       $customerId = (int)$this->context->customer->id;
 
@@ -462,9 +566,7 @@ class jeeb extends PaymentModule {
       $db = Db::getInstance();
       $result = $db->Execute('INSERT INTO `' . _DB_PREFIX_ . 'order_bitcoin_jeeb` (`id_order`, `key`, `cart_id`, `token`, `status`) VALUES("' . $orderNo . '", "' .$key.'", '. intval($cart->id) . ', "' . $token . '", "' . $status . '") on duplicate key update `status`="'.$status.'"');
 
-
-
-      redirectPayment($baseUri, $token);
+      $this->redirectPayment($token);
 
     }
   }
